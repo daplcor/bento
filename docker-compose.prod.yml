@@ -1,8 +1,6 @@
-version: '3.1'
-
 services:
-
   db:
+    image: postgres
     environment:
       POSTGRES_USER: "${POSTGRES_USER}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
@@ -22,7 +20,7 @@ services:
       context: .
       dockerfile: indexer.dockerfile
       args:
-        BUILDER_IMAGE: builder
+        - BUILDER_IMAGE=builder:latest
     image: indexer
     restart: always
     depends_on:
@@ -34,7 +32,7 @@ services:
       context: .
       dockerfile: api.dockerfile
       args:
-        BUILDER_IMAGE: builder
+        - BUILDER_IMAGE=builder:latest
     restart: always
     depends_on:
       - db

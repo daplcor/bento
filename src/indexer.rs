@@ -4,7 +4,7 @@ use core::panic;
 use futures::stream;
 use futures::StreamExt;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::str::FromStr;
 use std::time::Instant;
@@ -19,6 +19,9 @@ use super::repository::*;
 use crate::chainweb_client::ChainwebClient;
 use crate::db::DbError;
 use crate::transfers;
+
+// Define our target chains as a constant
+const TARGET_CHAINS: [u16; 3] = [1, 2, 8];
 
 pub struct Indexer<'a> {
     pub chainweb_client: &'a ChainwebClient,
@@ -47,6 +50,12 @@ impl<'a> Indexer<'a> {
         chain: i64,
         force_update: bool,
     ) -> Result<(), Box<dyn Error>> {
+        // Validate that the requested chain is one we want to index
+        if !TARGET_CHAINS.contains(&(chain as u16)) {
+            log::info!("Skipping chain {} as it's not in target chains", chain);
+            return Ok(());
+        }
+
         let cut = self.chainweb_client.get_cut().await.unwrap();
         let latest_block_hash = cut
             .hashes
@@ -66,9 +75,6 @@ impl<'a> Indexer<'a> {
                 &bounds,
                 &None,
                 None,
-                // The /chain/{chain}/header/branch endpoint returns blocks > min_height
-                // not >= as the documentation states so we go one block back to make
-                // sure we also get the block at min_height.
                 Some((min_height - 1) as u64),
             )
             .await?;
@@ -132,46 +138,49 @@ impl<'a> Indexer<'a> {
     }
     fn get_all_bounds(&self, cut: &Cut) -> Vec<(ChainId, Bounds)> {
         let mut bounds: Vec<(ChainId, Bounds)> = vec![];
-        cut.hashes.iter().for_each(|(chain, last_block_hash)| {
-            log::info!(
-                "Chain: {}, current height: {}, last block hash: {}",
-                chain.0,
-                last_block_hash.height,
-                last_block_hash.hash
-            );
-            match self
-                .blocks
-                .find_min_max_height_blocks(chain.0 as i64)
-                .unwrap()
-            {
-                (Some(min_block), Some(max_block)) => {
-                    bounds.push((
-                        chain.clone(),
-                        Bounds {
-                            lower: vec![Hash(max_block.hash)],
-                            upper: vec![Hash(last_block_hash.hash.to_string())],
-                        },
-                    ));
-                    if min_block.height > 0 {
+        cut.hashes.iter()
+            // Add filter here for target chains
+            .filter(|(chain, _)| TARGET_CHAINS.contains(&chain.0))
+            .for_each(|(chain, last_block_hash)| {
+                log::info!(
+                    "Chain: {}, current height: {}, last block hash: {}",
+                    chain.0,
+                    last_block_hash.height,
+                    last_block_hash.hash
+                );
+                match self
+                    .blocks
+                    .find_min_max_height_blocks(chain.0 as i64)
+                    .unwrap()
+                {
+                    (Some(min_block), Some(max_block)) => {
                         bounds.push((
                             chain.clone(),
                             Bounds {
-                                lower: vec![],
-                                upper: vec![Hash(min_block.hash)],
+                                lower: vec![Hash(max_block.hash)],
+                                upper: vec![Hash(last_block_hash.hash.to_string())],
                             },
                         ));
+                        if min_block.height > 0 {
+                            bounds.push((
+                                chain.clone(),
+                                Bounds {
+                                    lower: vec![],
+                                    upper: vec![Hash(min_block.hash)],
+                                },
+                            ));
+                        }
                     }
+                    (None, None) => bounds.push((
+                        chain.clone(),
+                        Bounds {
+                            lower: vec![],
+                            upper: vec![Hash(last_block_hash.hash.to_string())],
+                        },
+                    )),
+                    _ => {}
                 }
-                (None, None) => bounds.push((
-                    chain.clone(),
-                    Bounds {
-                        lower: vec![],
-                        upper: vec![Hash(last_block_hash.hash.to_string())],
-                    },
-                )),
-                _ => {}
-            }
-        });
+            });
         bounds
     }
 
@@ -326,6 +335,12 @@ impl<'a> Indexer<'a> {
                                 let block_header_event: BlockHeaderEvent =
                                     serde_json::from_str(&ev.data).unwrap();
                                 let chain_id = block_header_event.header.chain_id.clone();
+                                
+                                // Skip if this chain is not in our target set
+                                if !TARGET_CHAINS.contains(&chain_id.0) {
+                                    return Ok(());
+                                }
+
                                 log::info!(
                                     "Chain {} header, height {} received",
                                     chain_id,

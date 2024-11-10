@@ -1,0 +1,33 @@
+target/
+debug/
+.git/
+.github/
+.gitignore
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Docker files
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Environment/config
+.env*
+!.env
+!.env.example
+config/
+
+# Generated files
+**/*.rs.bk
+*.pdb
+
+# Test stuff
+tests/
+benches/
+examples/
+
+# Explicitly we can't ignore migrations
+!migrations/
+!migrations/**/*
